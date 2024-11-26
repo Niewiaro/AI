@@ -1,12 +1,19 @@
-import os
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from transformers import pipeline
 
-file_name = "document.txt"
-document = """
+
+class Config:
+    def __init__(self):
+        self.questions = (
+            "Who am I writing with?",
+            "When he will arrive?",
+            "Tell me his favorite song",
+        )
+        self.file_name = "document.txt"
+        self.document = """
 **What time do you have Barbara?**  
 *Michał:*  
 Barbera?  
@@ -85,14 +92,19 @@ Send me a fart from your p***y.
 """
 
 
-def main() -> None:
+def create_file(file_name: str = "", text: str = "") -> None:
+    """Create a text file with the given content."""
     with open(file_name, "w") as file:
-        file.write(document)
+        file.write(text)
 
+
+def build_vector_store(file_name: str, chunk_size: int = 100, chunk_overlap: int = 30):
+    """Build a FAISS vector store from the document."""
     loader = TextLoader(file_name)
     documents = loader.load()
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=30)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
     texts = text_splitter.split_documents(documents)
 
     embedding = HuggingFaceEmbeddings(
@@ -100,20 +112,51 @@ def main() -> None:
     )
     vector_store = FAISS.from_documents(texts, embedding)
 
+    return vector_store
+
+
+def run_rag_system(query: str, vector_store, model, k: int = 3) -> str:
+    """Retrieve relevant documents and generate an answer."""
+    docs = vector_store.similarity_search(query, k)
+    context = "\n".join([doc.page_content for doc in docs])
+
+    result = model(question=query, context=context)
+    answer = result["answer"]
+    return answer
+
+
+def execute_queries(vector_store, questions: list, model, k: int = 3) -> dict:
+    """Execute multiple queries on the vector store."""
+    results = {}
+    for question in questions:
+        try:
+            answer = run_rag_system(question, vector_store, model, k)
+            results[question] = answer
+        except Exception as e:
+            results[question] = f"Error: {str(e)}"
+    return results
+
+
+def main() -> None:
+    config = Config()
+
+    # Step 1: Create the document file
+    create_file(config.file_name, config.document)
+
+    # Step 2: Build the vector store
+    vector_store = build_vector_store(config.file_name)
+
+    # Step 3: Initialize the question-answering model
     model = pipeline(
         "question-answering", model="distilbert/distilbert-base-cased-distilled-squad"
     )
 
-    def run_rag_system(query):
-        docs = vector_store.similarity_search(query=query, k=3)
-        context = "\n".join([doc.page_content for doc in docs])
+    # Step 4: Execute the queries
+    answers = execute_queries(vector_store, config.questions, model)
 
-        result = model(question=query, context=context)
-        answer = result["answer"]
-        return answer
-
-    question = "When Michał arrive?"
-    print(f"Q:\t{question}\nA:\t{run_rag_system(question)}")
+    # Step 5: Print the results
+    for question, answer in answers.items():
+        print(f"Q: {question}\nA: {answer}\n")
 
 
 if __name__ == "__main__":
